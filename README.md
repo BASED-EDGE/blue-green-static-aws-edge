@@ -1,28 +1,53 @@
-# Welcome to your CDK TypeScript project!
+# blue-green-static-aws-edge
 
-This is a blank project for TypeScript development with CDK.
+### This reference architecture has been provided by [BASED EDGE LLC](https://basededge.dev)
 
-The `cdk.json` file tells the CDK Toolkit how to execute your app.
+## WHAT
+This repo contains a sample reference AWS CDK stack for setting up a [blue green](https://docs.aws.amazon.com/whitepapers/latest/overview-deployment-options/bluegreen-deployments.html) deployed [serverless](https://aws.amazon.com/serverless/) distribution.
 
-## Useful commands
+A sample React javascript application is (async) chunked by webpack with a distinct *buildId* included in the [publicPath](https://webpack.js.org/guides/public-path/). The cdk stack deploys the web assets to S3 (using the buildId as a the subfolder) as well as update the edge lambda to a new version with the latest *buildId*. AWS Code Deploy then slowly switches traffic b/w the old lambda and the new lambda. As users visit the page, they will be progressively more likely to see the new version over the old version until the deployment successfully completes.
 
- * `npm run build`   compile typescript to js
- * `npm run watch`   watch for changes and compile
- * `npm run test`    perform the jest unit tests
- * `cdk deploy`      deploy this stack to your default AWS account/region
- * `cdk diff`        compare deployed stack with current state
- * `cdk synth`       emits the synthesized CloudFormation template
+If something were to go wrong with the latest assets, (ie: code bug), the code deployment would fail and revert to the old version. Since the javascript entry should never be cached, any users who were served the bad version will get the old version after reloading the page. The same rollback action could be manually performed if an issue was discovered after the deployment completed.
 
-v0
-edge lambda that can switch sub folder in s3 bucket
-bluegreen deploy it
+The major down side with this approach is having to invoke a lambda  every time a user loads the widget. This can lead to incurring Lambda costs, depending the level of traffic the app receives. These costs can be lower (or more operationally acceptable) than running comparable server(s) 24/7.
 
-todo for v1
-chunked web assets, react lib with lazy loaded pages
-sample website to deploy this all to
-basic post back metrics for alarms (have webapp have generate metrics for rollback alarm)
-client side alarm api gateway
-rollback alarm on deployment
+Another issue is incurring addition costs from always having to fetch the *index.js*. This will incur a financial cost in terms of S3 GET requests as well as a performance cost of always having to fetch the asset from us-east-1 (the sample client app aggressively asynchronously loads everything in the index to minimize its size at build time and ensure that most of the app is cached at the edge by CloudFront). (coming soon) the lambda can be upgraded to redirect the origin request to the closest aws region + replicated bucket, to reduce latency due to distance.
 
-idea v2
+
+Alternatively, a hybrid or all-in  approach with Cloudflare R2 could be considered.
+
+
+### live demo
+[HERE](https://d2prqirr6xh077.cloudfront.net)
+
+## HOW
+
+(todo arch diagram)
+
+### AWS Services used
+- [Lambda@Edge](https://aws.amazon.com/lambda/edge/)
+- [S3](https://aws.amazon.com/s3/)
+- [CloudFront](https://aws.amazon.com/cloudfront/)
+- [CodeDeploy](https://aws.amazon.com/codedeploy/)
+- Cloudwatch (coming soon)
+
+## WHY
+For engineers that need to deploy javascript applications to many sites that they do not control, this is offered as one approach. Since they do not want to be beholden to many different deployment pipelines, this architecture allows them to deploy the javascript to a single distribution in a controlled and safe manner (slow rollout using blue green deployments ) and fully control the rollback if there were to be an issue without having to boss around all the different consumers.
+
+depending on an organization structure and/or priorities, host teams may not be interested in maintain a noticeable and ongoing operation cost of integrating your app into their site.
+
+## HOW
+0. install node 14+, set up local aws credentials for your test account
+1. ```npm i``` to install all node js dependencies
+2. ```npm run build``` to build local assets
+3. ```npm run cdk synth``` to set up your aws account for use with CDK
+4. ```npm run cdk deploy``` to deploy the cdk stack and web assets (this should take some time due to cloudfront distribution creation time). 
+
+## NEXT
+### v2
+- basic post back metrics for alarms (have webapp have generate metrics for rollback alarm)
+- client side alarm api gateway
+- rollback alarm on deployment
+
+### v3
 deploy buckets all around aws regions to be closer to the cloudfront entry point. needs different stacks but consistent deployment id to duplicate assets to all buckets....

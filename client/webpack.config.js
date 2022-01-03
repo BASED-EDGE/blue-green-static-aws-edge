@@ -4,7 +4,6 @@ const fs = require('fs')
 
 module.exports = {
     entry: {index:"./src/index.jsx"},
-    // mode: "production",
     module: {
       rules: [
         {
@@ -22,29 +21,25 @@ module.exports = {
       filename:'[name].js',
       chunkFilename:'[contenthash].js',
       asyncChunks:true,
-      // filename: '[contenthash].js',
-
-       publicPath: "/assets/"+fs.readFileSync('./dist/build_id').toString(),
-    //   filename: "bundle.js"
+       publicPath: process.argv.includes('production') ?
+        "/assets/"+fs.readFileSync('./dist/build_id').toString()+'/'
+        :undefined,
     },
     devServer: {
-    //   contentBase: path.join(__dirname, "public/"),
       port: 3000,
-     // publicPath: "http://localhost:3000/dist/",
-    //  hotOnly: true
     },
     plugins:[
       new HtmlWebpackPlugin({
         templateContent: `
     <html>
+      <head>
+        <title>webpack dev server page</title>
+      </head>
       <body>
-        <h1>Hello World</h1>
         <div id="root" ></div>
       </body>
     </html>
   `
-
       })
     ],
-    // plugins: [new webpack.HotModuleReplacementPlugin()]
   };
