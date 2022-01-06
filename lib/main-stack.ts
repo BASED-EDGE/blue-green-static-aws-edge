@@ -1,35 +1,44 @@
-import { Duration, RemovalPolicy, Stack, StackProps } from 'aws-cdk-lib'
-import { Construct } from 'constructs'
+import { Duration, RemovalPolicy, Stack, StackProps,CfnOutput } from 'aws-cdk-lib'
+import { Construct, } from 'constructs'
 
 import {BucketDeployment, Source} from 'aws-cdk-lib/aws-s3-deployment'
 import {Bucket} from 'aws-cdk-lib/aws-s3'
 import {CloudFrontWebDistribution, LambdaEdgeEventType, OriginAccessIdentity} from 'aws-cdk-lib/aws-cloudfront'
 import {Code, Function, Runtime, Alias} from 'aws-cdk-lib/aws-lambda'
 import {LambdaApplication, LambdaDeploymentConfig, LambdaDeploymentGroup} from 'aws-cdk-lib/aws-codedeploy'
+import {CfnRecordSet} from 'aws-cdk-lib/aws-route53'
 
 interface Props extends StackProps {
   buildId:string
+  domain?:string
+  regions?:string[]
+  hostedZoneId?:string
 }
 
 export class MainStack extends Stack {
+  public originAccessIdName:string
+
   constructor(scope: Construct, id: string, props: Props) {
     super(scope, id, props);
 
     const deploymentId: string = props.buildId
 
     const bucket = new Bucket(this,'assetBucket',{
-      bucketName:'blue-green-static-based-edge',
-      removalPolicy:RemovalPolicy.DESTROY
+      bucketName: props.domain ? 
+      `${props.env?.region}-bucket.${props.domain}` :
+      `${props.env?.account}-${props.env?.region}-blue-green-static-edge`, // fallback in case one does not want to use/have a custom domain
+      removalPolicy:RemovalPolicy.DESTROY, // easier for clean up
     })
-    
+
+    // put some basic static assets at the root to host the js assets
     new BucketDeployment(this,'mainPageDeployment',{
       destinationBucket:bucket, 
       sources:[
         Source.asset(__dirname+'/../testSite')
       ]
     })
-
-    // deploy the built js assests in their sub folder
+ 
+    // deploy the built js assets in their sub folder
     new BucketDeployment(this,'assetDeployment',{
       destinationBucket:bucket, 
       destinationKeyPrefix:'assets/'+deploymentId, 
@@ -38,25 +47,96 @@ export class MainStack extends Stack {
       ]
     })
 
+    //copy assets over to the 'edge buckets'
+    // taking advantage of s3's globalish nature...
+    // cant have s3 do it for us in the background since you can only replicate to 1 bucket
+    props.regions?.forEach(region => {
+      const destinationBucket = Bucket.fromBucketName(this,'dupBucket_'+region,`${region}-bucket.${props.domain}`)
+      new BucketDeployment(this,'mainPageDeployment'+region,{
+        destinationBucket, 
+        sources:[
+          Source.asset(__dirname+'/../testSite')
+        ]
+      })
+
+      new BucketDeployment(this,'assetDeployment'+region,{
+        destinationBucket, 
+        destinationKeyPrefix:'assets/'+deploymentId, 
+        sources:[
+          Source.asset(__dirname+'/../client/dist')
+        ]
+      })
+    })
+
     const edgeLambda = new Function(this,'assetRouter',{
       // todo: set cookie on response so that code knows where to get chunks + know its version? not needed to function
-      // todo: use closer s3 bucket?
+      // uses closer s3 bucket? - use dns to look up TXT for closes region, change bucket to ${region}-bucket.${props.domain}. for WA , saves ~40-100ms reading from the us-west-2 bucket instead of us-east-1
       // assumes req for /assets/index.js
+      // influenced by https://aws.amazon.com/blogs/apn/using-amazon-cloudfront-with-multi-region-amazon-s3-origins/
       code: Code.fromInline(`
       'use strict';
+      const dns = require('dns').promises
+      let cachedRegion = null
 
-      exports.handler = (event, context, callback) => {
+      exports.handler = async (event, context, callback) => {
         const request = event.Records[0].cf.request;
-        console.log(JSON.stringify(event),request.uri, "${deploymentId}")
+        //console.log(JSON.stringify(event),request.uri, "${deploymentId}")
+        
+        try {
+          if (!cachedRegion){
+            const result = await dns.resolveTxt('bucket.${props.domain}')
+            cachedRegion = result[0][0]
+          }
+
+          const region = cachedRegion
+          request.origin.s3.domainName = region+'-bucket.${props.domain}.s3.'+region+'.amazonaws.com'
+          request.origin.s3.region = region
+          request.headers['host'] = [{ key: 'host', value: region+'-bucket.${props.domain}.s3.'+region+'.amazonaws.com' }]
+        } catch (e){
+          // suppress error
+          console.error(e) 
+        }
 
         request.uri = '/assets/${deploymentId}/index.js'
+        
+        //console.log(JSON.stringify(request))
         
         callback(null, request);
       }
       `),
       handler:'index.handler',
       runtime:Runtime.NODEJS_14_X,
-      description:'edge lambda for pciking s3 deployment to serve. '+deploymentId // always update lambda fn config so that it will trigger deployment
+      description:'edge lambda for picking s3 deployment to serve. '+deploymentId // always update lambda fn config so that it will trigger deployment
+    })
+
+    const chunkEdgeLambda = new Function(this,'chunkEdgeLambda',{
+      code: Code.fromInline(`
+      'use strict';
+      const dns = require('dns').promises
+      let cachedRegion = null
+
+      exports.handler = async (event, context, callback) => {
+        const request = event.Records[0].cf.request;
+
+        try {
+          if (!cachedRegion) {
+            const result = await dns.resolveTxt('bucket.${props.domain}')
+            cachedRegion = result[0][0]
+          }
+          const region = cachedRegion   
+          request.origin.s3.domainName = region+'-bucket.${props.domain}.s3.'+region+'.amazonaws.com'
+          request.origin.s3.region = region
+          request.headers['host'] = [{ key: 'host', value: region+'-bucket.${props.domain}.s3.'+region+'.amazonaws.com' }]
+        } catch (e){
+          // suppress error
+          console.error(e) 
+        }
+        callback(null, request);
+      }
+      `),
+      handler:'index.handler',
+      runtime:Runtime.NODEJS_14_X,
+      description:'edge lambda for serving asset chunks. ' // always update lambda fn config so that it will trigger deployment
     })
 
     const alias = new Alias(this,'assetRouterAlias',{
@@ -67,30 +147,61 @@ export class MainStack extends Stack {
       applicationName:'assetRouter',
     })
 
-    // todo: immediate rollback for pipeline rollback (reqs pipeline deployment)
+    // todo: immediate rollback for pipeline rollback (reqs a pipeline deployment)
     new LambdaDeploymentGroup(this,'ldp',{
       application:la,
       alias:alias,
+      // deploymentConfig:LambdaDeploymentConfig.ALL_AT_ONCE, // for easier dev work
       deploymentConfig:LambdaDeploymentConfig.LINEAR_10PERCENT_EVERY_1MINUTE,
       autoRollback:{
         failedDeployment:true,
-        deploymentInAlarm:false, //todo alarms....
+        deploymentInAlarm:false, //TODO alarms....
       }
     })
 
-    
     const oai = new OriginAccessIdentity(this,'oai',{
     })
-
+    new CfnOutput(this,'originAccessIdentityName',{
+      value:oai.originAccessIdentityName // this value needs to be manually passed to the edge bucket stack once created so that cloudfront can access them
+    })
     bucket.grantRead(oai)
-    new CloudFrontWebDistribution(this,'dist',{
+
+    if(props.hostedZoneId){
+      
+    //idea is to find the closest bucket from the edge entry point so that the lambda can re-route the s3 request to said bucket
+    //  (this could also require us to also use the edge req for assets ?, or let 1 person take the cache miss, and then everyone is fine?)
+    // todo: set this in a separate repo as a generic tool -> 2 endpoints. 1 for all aws regions, 1 for all og regions (ie: non-opt in)
+    // simple tool for figuring out which region to use...maybe also a simple website-> make use of cloudfront headers? an echo service?
+      [
+        props.env?.region||'',
+        ...(props.regions||[])
+      ].forEach(region => {
+        new CfnRecordSet(this, `MyCfnRecordSet${region}`, {
+          name: `bucket.${props.domain}`,
+          type: 'TXT',
+          hostedZoneId: props.hostedZoneId,
+          region: region,
+          resourceRecords: [`"${region}"`],
+          setIdentifier: region,
+          ttl: Duration.hours(1).toSeconds().toString(),  // want to keep the number of DNS requests low to keep costs down
+        })
+      })
+    }
+
+    const dist = new CloudFrontWebDistribution(this,'dist',{
       originConfigs:[
         {
           behaviors:[
             {
               //cache chunks for ever since they get unique urls per build (ignoring the test page)
               isDefaultBehavior:true,
-              defaultTtl:Duration.days(365)
+              defaultTtl:Duration.days(365),
+              // this lambda can be omitted to reduce lambda + route53 queries at the cost of increased cache miss origin latency issues
+              // if you run canaries against your edge regions (like AWS does) , this should not be needed (since the canary will most likely take the performance hit)
+              lambdaFunctionAssociations:[{
+                eventType:LambdaEdgeEventType.ORIGIN_REQUEST,
+                lambdaFunction:chunkEdgeLambda.currentVersion
+              }],              
             },
             {
               pathPattern:'/assets/index.js',
@@ -112,10 +223,13 @@ export class MainStack extends Stack {
         
       ]
     })
+    new CfnOutput(this,'CloudFrontWebDistribution',{
+      value:dist.distributionDomainName
+    })
 /**
- * clientside metric post back to cloudwatch
+ * todo clientside metric post back to cloudwatch
  * create rollback alarm
  *  */    
-
   }
+ 
 }
