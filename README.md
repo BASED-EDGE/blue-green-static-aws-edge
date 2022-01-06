@@ -1,6 +1,7 @@
 # blue-green-static-aws-edge
 
 ### This reference architecture has been provided by [BASED EDGE LLC](https://basededge.dev)
+![](https://github.com/BASED-EDGE/blue-green-static-aws-edge/blob/master/LinkedIn%20Company%20Logo.png?raw=true)
 
 ## WHAT
 This repo contains a sample reference AWS CDK stack for setting up a [blue green](https://docs.aws.amazon.com/whitepapers/latest/overview-deployment-options/bluegreen-deployments.html) deployed [serverless](https://aws.amazon.com/serverless/) distribution.
