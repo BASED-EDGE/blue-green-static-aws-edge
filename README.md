@@ -48,7 +48,7 @@ Depending on an organization structure and/or priorities, host teams may not be 
 8. ```npm run cdk deploy '*-EdgeBucket``` to grant cloudfront access to the buckets
 
 ## NEXT
-### v2
+### v2 (done)
 - basic post back metrics for alarms (have webapp have generate metrics for rollback alarm)
 - client side alarm api gateway
 - rollback alarm on deployment

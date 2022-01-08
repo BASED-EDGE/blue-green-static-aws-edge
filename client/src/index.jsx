@@ -19,15 +19,17 @@ function main() {
     const DefaultPage = React.lazy(() => import('./default'))
     const GenerateAlarm = React.lazy(() => import('./generateAlarm'))
 
-    render(
-      <HashRouter>
-        <React.Suspense fallback={<div>loading chunk....</div>} >
-          <Routes>
-            <Route path="/" element={<DefaultPage />} />
-            <Route path="generate-alarm" element={<GenerateAlarm />} />
-          </Routes>
-        </React.Suspense>
-      </HashRouter>,
+    render(<div>
+        <h1>sample react app</h1>
+        <HashRouter>
+          <React.Suspense fallback={<div>loading chunk....</div>} >
+            <Routes>
+              <Route path="/" element={<DefaultPage />} />
+              <Route path="generate-alarm" element={<GenerateAlarm />} />
+            </Routes>
+          </React.Suspense>
+        </HashRouter>
+      </div>,
       document.getElementById('root')
     )
   })

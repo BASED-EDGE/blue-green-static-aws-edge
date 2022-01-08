@@ -7,6 +7,11 @@ import {CloudFrontWebDistribution, LambdaEdgeEventType, OriginAccessIdentity} fr
 import {Code, Function, Runtime, Alias} from 'aws-cdk-lib/aws-lambda'
 import {LambdaApplication, LambdaDeploymentConfig, LambdaDeploymentGroup} from 'aws-cdk-lib/aws-codedeploy'
 import {CfnRecordSet} from 'aws-cdk-lib/aws-route53'
+import { Effect, PolicyStatement } from 'aws-cdk-lib/aws-iam'
+import {Alarm, ComparisonOperator, Metric, TreatMissingData} from 'aws-cdk-lib/aws-cloudwatch'
+
+import {HttpApi, HttpMethod} from '@aws-cdk/aws-apigatewayv2-alpha'
+import {HttpLambdaIntegration} from '@aws-cdk/aws-apigatewayv2-integrations-alpha'
 
 interface Props extends StackProps {
   buildId:string
@@ -14,6 +19,8 @@ interface Props extends StackProps {
   regions?:string[]
   hostedZoneId?:string
 }
+
+const NAMESPACE =  'BlueGreenStaticAWSEdge'
 
 export class MainStack extends Stack {
   public originAccessIdName:string
@@ -66,6 +73,22 @@ export class MainStack extends Stack {
           Source.asset(__dirname+'/../client/dist')
         ]
       })
+    })
+
+
+    const clientSideAlarm = new Alarm(this,'clientSideAlarm',{
+      // adjust these values to suit your needs. these value are for testing
+      evaluationPeriods:1,
+      threshold:2,
+      metric:new Metric({
+        metricName:'clientSideError',
+        namespace:NAMESPACE,
+        statistic:'sum',
+        period: Duration.minutes(5)
+      }),
+      comparisonOperator:ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      alarmName:'clientSideAlarm',
+      treatMissingData:TreatMissingData.NOT_BREACHING 
     })
 
     const edgeLambda = new Function(this,'assetRouter',{
@@ -156,7 +179,10 @@ export class MainStack extends Stack {
       autoRollback:{
         failedDeployment:true,
         deploymentInAlarm:false, //TODO alarms....
-      }
+      },
+      alarms:[
+        clientSideAlarm
+      ]
     })
 
     const oai = new OriginAccessIdentity(this,'oai',{
@@ -226,10 +252,59 @@ export class MainStack extends Stack {
     new CfnOutput(this,'CloudFrontWebDistribution',{
       value:dist.distributionDomainName
     })
-/**
- * todo clientside metric post back to cloudwatch
- * create rollback alarm
- *  */    
+
+    this.createMetricsPostbackApi()
+   
   }
- 
+
+  /**
+   * create an api gateway to have the client app send back metrics to
+   * this will publish the metrics used for the rollback alarm during the blue-green deployment
+   * 
+   * if an error were to surface AFTER the deployment has succeeded, one would have to manually initiate the rollback
+   * @returns 
+   */
+  createMetricsPostbackApi():{api:HttpApi}{
+   const metricFn= new Function(this,'metricApiFunction',{
+      code:Code.fromAsset(__dirname + '/../api'),
+      handler:'index.handler',
+      runtime:Runtime.NODEJS_14_X,
+      environment: {
+        NAMESPACE
+      },
+      initialPolicy:[new PolicyStatement({
+        effect: Effect.ALLOW,
+        actions:['cloudwatch:PutMetricData'],
+        resources:['*'],
+        // https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/iam-cw-condition-keys-namespace.html
+        conditions:{
+            StringEquals: {
+                'cloudwatch:namespace': NAMESPACE
+            }
+        }
+      })]
+    })
+
+    const api = new HttpApi(this,'metricApi',{
+      createDefaultStage:false,
+    })
+
+    const stage = 'api'
+    api.addStage(stage,{autoDeploy:true,stageName:stage,})
+    api.addRoutes({
+      path: '/metric',
+      methods: [ HttpMethod.POST ],
+      integration:  new HttpLambdaIntegration('metricFnIntg', metricFn)
+    })
+
+    new CfnOutput(this,'metricApiDomain',{
+      value:`https://${api.apiId}.execute-api.${this.region}.amazonaws.com/${stage}`
+    })
+
+    return {
+      api
+    }
+   
+  }
+
 }
