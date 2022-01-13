@@ -10,10 +10,7 @@ A sample React javascript application is (async) chunked by webpack with a disti
 
 If something were to go wrong with the latest assets, (ie: code bug), the code deployment would fail and revert to the old version. Since the javascript entry should never be cached, any users who were served the bad version will get the old version after reloading the page. The same rollback action could be manually performed if an issue was discovered after the deployment completed.
 
-The major down side with this approach is having to invoke a lambda  every time a user loads the widget. This can lead to incurring Lambda costs, depending the level of traffic the app receives. These costs can be lower (or more operationally acceptable) than running comparable server(s) 24/7.
-
-Another issue is incurring addition costs from always having to fetch the *index.js*. This will incur a financial cost in terms of S3 GET requests as well as a performance cost of always having to fetch the asset from us-east-1 (the sample client app aggressively asynchronously loads everything in the index to minimize its size at build time and ensure that most of the app is cached at the edge by CloudFront). Using [Route53 latency routing](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/routing-policy.html#routing-policy-latency), the edge lambda was upgraded to redirect the origin request to the closest aws region + replicated bucket, to reduce distance based latency. Yet again, this introduces more (possible) line items to the AWS bill in terms of additional [storage costs](https://aws.amazon.com/s3/pricing/) and [DNS queries](https://aws.amazon.com/route53/pricing/#Queries), but these *should be* pretty minor.
-
+The major down side with this approach is having to invoke a lambda  every time a user loads the widget. This can lead to incurring Lambda costs, depending the level of traffic the app receives. These costs can be lower (or more operationally acceptable) than running comparable server(s) 24/7. The contents of *index.js* are inlined directly into the edge lambda handler since it is small enough to fit inside the lambda without impossing a large cold start time. By moving the file into the edge lambda, we are able to avoid the s3 call all together (saving some ms and $$$). Using [Route53 latency routing](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/routing-policy.html#routing-policy-latency), the js chunk edge lambda was upgraded to redirect the origin request to the closest aws region + replicated bucket, to reduce distance based latency. Yet again, this introduces more (possible) line items to the AWS bill in terms of additional [storage costs](https://aws.amazon.com/s3/pricing/) and [DNS queries](https://aws.amazon.com/route53/pricing/#Queries), but these *should be* pretty minor.
 
 Alternatively, a hybrid or all-in  approach with Cloudflare R2 could be considered.
 
@@ -30,7 +27,7 @@ Alternatively, a hybrid or all-in  approach with Cloudflare R2 could be consider
 - [CloudFront](https://aws.amazon.com/cloudfront/)
 - [CodeDeploy](https://aws.amazon.com/codedeploy/)
 - [Route53](https://aws.amazon.com/route53)
-- Cloudwatch (coming soon)
+- [Cloudwatch](https://aws.amazon.com/cloudwatch)
 
 ## WHY
 For engineers that need to deploy javascript applications to many sites that they do not control, this is offered as one approach. Since they do not want to be beholden to many different deployment pipelines, this architecture allows them to deploy the javascript to a single distribution in a controlled and safe manner (slow rollout using blue green deployments ) and fully control the rollback if there were to be an issue without having to boss around all the different consumers.
