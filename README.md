@@ -19,7 +19,7 @@ Alternatively, a hybrid or all-in  approach with Cloudflare R2 could be consider
 [HERE](https://d2prqirr6xh077.cloudfront.net)
 
 ## HOW
-![arch diagram](./blue-green-static-aws-edge.drawio.png)
+![arch diagram](./blue-green-static-aws-edge.png)
 
 ### AWS Services used
 - [Lambda@Edge](https://aws.amazon.com/lambda/edge/)
